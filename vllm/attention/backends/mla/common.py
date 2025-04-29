@@ -300,7 +300,8 @@ class MLACommonState(AttentionState, Generic[T]):
         cache_config = runner.cache_config
 
         self.chunked_prefill_enabled = scheduler_config.chunked_prefill_enabled
-        self.enable_prefix_caching = cache_config.enable_prefix_caching
+        # TODO ptarasiewicz: we pretend that prefix caching is enabled to make fetching from Decode kv cache work
+        self.enable_prefix_caching = True # cache_config.enable_prefix_caching
 
         if self.chunked_prefill_enabled or self.enable_prefix_caching:
             self.context_chunk_workspace_size = min(
@@ -735,8 +736,8 @@ class MLACommonMetadataBuilder(AttentionMetadataBuilder[T], Generic[T]):
         self.block_size = input_builder.block_size
         self.chunked_prefill_enabled = \
             self.runner.scheduler_config.chunked_prefill_enabled
-        self.enable_prefix_caching = \
-            self.runner.cache_config.enable_prefix_caching
+        # TODO ptarasiewicz: we pretend that prefix caching is enabled to make fetching from Decode kv cache work
+        self.enable_prefix_caching = True # self.runner.cache_config.enable_prefix_caching
 
         if self.chunked_prefill_enabled or self.enable_prefix_caching:
             attn_state = self.input_builder.runner.attn_state
