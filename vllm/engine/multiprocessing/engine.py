@@ -41,6 +41,8 @@ from vllm.engine.multiprocessing import (ENGINE_DEAD_ERROR, IPC_DATA_EXT,
                                          RPCResetPrefixCacheRequest,
                                          RPCSleepRequest, RPCStartupRequest,
                                          RPCStartupResponse,
+                                         RPCHasUnfinishedRequestsRequest,
+                                         RPCHasUnfinishedRequestsResponse,
                                          RPCUProfileRequest, RPCWakeUpRequest, KvMetrics,
                                          IPC_REMOTE_NIXL_METADATA_EXT)
 # yapf: enable
@@ -412,6 +414,8 @@ class MQLLMEngine:
                     self.wake_up(request.tags)
                 elif isinstance(request, RPCIsSleepingRequest):
                     self._handle_is_sleeping_request(request)
+                elif isinstance(request, RPCHasUnfinishedRequestsRequest):
+                    self._handle_has_unfinished_requests_request(request)
                 else:
                     raise ValueError("Unknown RPCRequest Type: "
                                      f"{type(request)}")
@@ -490,6 +494,10 @@ class MQLLMEngine:
         self._send_outputs(
             RPCIsSleepingResponse(request_id=request.request_id,
                                   is_sleeping=is_sleeping))
+        
+    def _handle_has_unfinished_requests_request(self, request: RPCHasUnfinishedRequestsRequest):
+        response =  RPCHasUnfinishedRequestsResponse(request_id=request.request_id, has_unfinished_requests=self.engine.has_unfinished_requests())
+        self._send_outputs(response)
 
     def _health_check(self):
         # Send unhealthy if engine has already errored

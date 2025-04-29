@@ -133,9 +133,21 @@ class RPCStartupRequest(Enum):
 
 
 @dataclass
+class RPCHasUnfinishedRequestsRequest:
+    request_id: str = field(default_factory=lambda: str(uuid.uuid4()))
+
+
+@dataclass
 class RPCStartupResponse:
     tracing_enabled: bool
     nixl_metadata: Optional[bytes] = None
+
+
+@dataclass
+class RPCHasUnfinishedRequestsResponse:
+    has_unfinished_requests: bool
+    request_id: str
+
 
 class RPCUProfileRequest(Enum):
     START_PROFILE = 1
@@ -184,10 +196,10 @@ class RPCAdapterLoadedResponse:
 RPC_REQUEST_T = Union[RPCProcessRequest, RPCAbortRequest, RPCStartupRequest,
                       RPCUProfileRequest, RPCLoadAdapterRequest,
                       RPCResetPrefixCacheRequest, RPCSleepRequest,
-                      RPCWakeUpRequest, RPCIsSleepingRequest]
+                      RPCWakeUpRequest, RPCIsSleepingRequest, RPCHasUnfinishedRequestsRequest]
 
 REQUEST_OUTPUTS_T = Union[List[RequestOutput], RPCAdapterLoadedResponse,
-                          RPCIsSleepingResponse, RPCError]
+                          RPCIsSleepingResponse, RPCError, RPCHasUnfinishedRequestsResponse]
 
 
 def ENGINE_DEAD_ERROR(

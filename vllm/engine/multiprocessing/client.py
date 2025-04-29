@@ -50,7 +50,8 @@ from vllm.engine.multiprocessing import (ENGINE_DEAD_ERROR, IPC_DATA_EXT,
                                          RPCProcessRequest,
                                          RPCResetPrefixCacheRequest,
                                          RPCSleepRequest, RPCStartupRequest,
-                                         RPCStartupResponse,
+                                         RPCStartupResponse, RPCHasUnfinishedRequestsRequest,
+                                         RPCHasUnfinishedRequestsResponse,
                                          RPCUProfileRequest, KvMetrics, RPCWakeUpRequest)
 from vllm.engine.protocol import EngineClient
 # yapf: enable
@@ -348,7 +349,7 @@ class MQLLMEngineClient(EngineClient):
                 # Put each output into the appropriate queue.
                 elif isinstance(
                         request_outputs,
-                    (RPCAdapterLoadedResponse, RPCIsSleepingResponse)):
+                    (RPCAdapterLoadedResponse, RPCIsSleepingResponse, RPCHasUnfinishedRequestsResponse)):
                     self._add_output(request_outputs)
                 else:
                     for request_output in request_outputs:
@@ -359,7 +360,7 @@ class MQLLMEngineClient(EngineClient):
 
     def _add_output(self, request_output: Union[RequestOutput,
                                                 RPCAdapterLoadedResponse,
-                                                RPCIsSleepingResponse]):
+                                                RPCIsSleepingResponse, RPCHasUnfinishedRequestsResponse]):
         queue = self.output_queues.get(request_output.request_id)
         if queue is not None:
             queue.put_nowait(request_output)
@@ -400,7 +401,6 @@ class MQLLMEngineClient(EngineClient):
             if self.metrics_loop is None:
                 self.metrics_loop = asyncio.create_task(
                     self.run_metrics_loop(timeout=VLLM_RPC_TIMEOUT))
-
 
     def close(self):
         """Destroy the ZeroMQ Context."""
@@ -869,3 +869,19 @@ class MQLLMEngineClient(EngineClient):
 
     def set_metrics_publisher(self, metrics_publisher):
         self.metrics_publisher = metrics_publisher
+                
+    async def has_unfinished_requests(self) -> bool:
+        logger.info("Checking if there are unfinished requests")
+        if "has_unfinished_requests" not in self.output_queues:
+            logger.info("Creating has unfinished requests queue")
+            
+        request = RPCHasUnfinishedRequestsRequest()
+        queue: asyncio.Queue[Union[BaseException, RPCHasUnfinishedRequestsResponse]] = asyncio.Queue()
+        self.output_queues[request.request_id] = queue
+        request_bytes = pickle.dumps(request)
+        await self.input_socket.send_multipart((request_bytes, ), copy=False)
+        response = await queue.get()
+        self.output_queues.pop(request.request_id)
+        if isinstance(response, BaseException):
+            raise response
+        return response.has_unfinished_requests
