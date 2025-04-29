@@ -1,4 +1,17 @@
+# SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
 import uuid
 from dataclasses import dataclass, field
@@ -14,13 +27,17 @@ from vllm.outputs import RequestOutput
 from vllm.prompt_adapter.request import PromptAdapterRequest
 from vllm.sampling_params import SamplingParams
 from vllm.utils import Device, deprecate_kwargs
-
+from vllm.remote_prefill import RemotePrefillParams
+from vllm.distributed.device_communicators.nixl import NixlMetadata
 VLLM_RPC_SUCCESS_STR = "SUCCESS"
 
 IPC_INPUT_EXT = "_input_socket"
 IPC_OUTPUT_EXT = "_output_socket"
 IPC_HEALTH_EXT = "_health_socket"
 IPC_DATA_EXT = "_data_socket"
+IPC_REMOTE_PREFILL_REQUEST_EXT = "_remote_prefill_request_socket"
+IPC_REMOTE_NIXL_METADATA_EXT = "_remote_nixl_metadata_socket"
+IPC_METRICS_EXT = "_metrics_socket"
 
 
 class MQEngineDeadError(RuntimeError):
@@ -36,6 +53,7 @@ class RPCProcessRequest:
     trace_headers: Optional[Mapping[str, str]] = None
     prompt_adapter_request: Optional[PromptAdapterRequest] = None
     priority: int = 0
+    remote_prefill_params: Optional[RemotePrefillParams] = None
 
     @overload
     def __init__(
@@ -78,6 +96,7 @@ class RPCProcessRequest:
             trace_headers: Optional[Mapping[str, str]] = None,
             prompt_adapter_request: Optional[PromptAdapterRequest] = None,
             priority: int = 0,
+            remote_prefill_params: Optional[RemotePrefillParams] = None,
             *,
             inputs: Optional[PromptType] = None,  # DEPRECATED
     ) -> None:
@@ -95,7 +114,7 @@ class RPCProcessRequest:
         self.trace_headers = trace_headers
         self.prompt_adapter_request = prompt_adapter_request
         self.priority = priority
-
+        self.remote_prefill_params = remote_prefill_params
 
 @dataclass
 class RPCError:
@@ -114,8 +133,20 @@ class RPCStartupRequest(Enum):
 
 
 @dataclass
+class RPCHasUnfinishedRequestsRequest:
+    request_id: str = field(default_factory=lambda: str(uuid.uuid4()))
+
+
+@dataclass
 class RPCStartupResponse:
     tracing_enabled: bool
+    nixl_metadata: Optional[bytes] = None
+
+
+@dataclass
+class RPCHasUnfinishedRequestsResponse:
+    has_unfinished_requests: bool
+    request_id: str
 
 
 class RPCUProfileRequest(Enum):
@@ -165,10 +196,10 @@ class RPCAdapterLoadedResponse:
 RPC_REQUEST_T = Union[RPCProcessRequest, RPCAbortRequest, RPCStartupRequest,
                       RPCUProfileRequest, RPCLoadAdapterRequest,
                       RPCResetPrefixCacheRequest, RPCSleepRequest,
-                      RPCWakeUpRequest, RPCIsSleepingRequest]
+                      RPCWakeUpRequest, RPCIsSleepingRequest, RPCHasUnfinishedRequestsRequest]
 
 REQUEST_OUTPUTS_T = Union[List[RequestOutput], RPCAdapterLoadedResponse,
-                          RPCIsSleepingResponse, RPCError]
+                          RPCIsSleepingResponse, RPCError, RPCHasUnfinishedRequestsResponse]
 
 
 def ENGINE_DEAD_ERROR(
@@ -181,3 +212,13 @@ def ENGINE_DEAD_ERROR(
     return MQEngineDeadError(
         "Engine loop is not running. Inspect the stacktrace to "
         f"find the original error: {repr(error)}.")
+
+@dataclass
+class KvMetrics:
+    request_active_slots: int
+    request_total_slots: int
+    kv_active_blocks: int
+    kv_total_blocks: int
+    num_requests_waiting: int
+    gpu_cache_usage_perc: float
+    gpu_prefix_cache_hit_rate: float
