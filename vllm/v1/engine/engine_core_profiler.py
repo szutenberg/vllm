@@ -11,6 +11,7 @@ import math
 import threading
 import time
 from abc import ABCMeta
+import traceback
 
 from contextlib import contextmanager
 from typing import Any, List
@@ -20,18 +21,16 @@ import uuid
 import inspect
 import functools
 from vllm.logger import init_logger
+from collections import defaultdict
 
 logger = init_logger(__name__)
 
 class SingletonMeta(type):
     _instances = {}
-    _lock = threading.Lock()  # Thread safety
-
     def __call__(cls, *args, **kwargs):
-        with cls._lock:
-            if cls not in cls._instances:
-                instance = super().__call__(*args, **kwargs)
-                cls._instances[cls] = instance
+        if cls not in cls._instances:
+            instance = super().__call__(*args, **kwargs)
+            cls._instances[cls] = instance
         return cls._instances[cls]
 
 class FileWriter(threading.Thread):
@@ -67,13 +66,11 @@ class FileWriter(threading.Thread):
 
 class EngineCoreProfiler(metaclass=SingletonMeta):
     profiling_trace_events: queue.Queue = queue.Queue()
-    event_tid = {'counter': 1, 'external': 2, 'internal': 3, 'scheduler': 4}
-    event_cache: List[Any] = []
-
     def __init__(self, vllm_instance_id = None):
         self.path = os.getenv('VLLM_TORCH_PROFILER_DIR', 'false').lower()
         self.enabled = self.path != 'false'
         self.pid = os.getpid()
+        self.event_cache = defaultdict(list)
         if self.enabled:
             self.vllm_instance_id = vllm_instance_id if vllm_instance_id is not None \
                 else f"vllm-instance-{self.pid}-{str(uuid.uuid4().hex)}"
@@ -105,42 +102,53 @@ class EngineCoreProfiler(metaclass=SingletonMeta):
                 'ts': ts,
                 'args': counter
             })
+            
+    def get_stack(self):
+        frames = inspect.stack()
+        out = ""
+        for frame in frames:
+            if "contextlib.py" in frame.filename:
+                continue
+            if "engine_core_profiler" in frame.filename:
+                continue
+            s = "{}({}): {}".format(frame.filename, frame.lineno, frame.function)
+            out = out + s + "\n"
+        return out
 
-    def start(self, type, name, args=None):
+    def start(self, name, args=None):
         if self.enabled:
             ts = self.get_timestamp_us()
-            if args is not None and 'counter' in args:
+            if args is None:
+                args = {}
+            args['stack'] = self.get_stack()
+            if 'counter' in args:
                 self.record_counter(ts, args['counter'])
                 del args['counter']
+            tid = threading.get_native_id()
             event = {
                 'pid': self.pid,
-                'tid': self.event_tid[type],
+                'tid': tid,
                 'ph': 'X',
                 'name': name,
                 'ts': ts,
                 'dur': None,
                 'args': args
             }
-            self.event_cache.append(event)
+            self.event_cache[tid].append(event)
 
     def end(self):
         if self.enabled:
+            tid = threading.get_native_id()
             ts = self.get_timestamp_us()
-            if not self.event_cache:
-                logger.warning(
-                    'Profiler: end() call does not have matching start() call. '
-                    'Disabling profiler.')
-                self.enabled = False
-                return
-            event = self.event_cache.pop()
+            event = self.event_cache[tid].pop()
             event['dur'] = ts - event['ts']
             self._dump_with_sep(event)
 
 
     @contextmanager
-    def record_event(self, type, name, args=None):
+    def record_event(self, name, args=None):
         if self.enabled:
-            self.start(type, name, args)
+            self.start(name, args)
             yield
             self.end()
         else:
@@ -153,13 +161,13 @@ def profiler_wrapper(func):
         @functools.wraps(func)
         def gen_wrapper(*args, **kwargs):
             gen = func(*args, **kwargs)
-            with profiler.record_event('internal', func.__qualname__):
+            with profiler.record_event(func.__qualname__):
                 yield from gen
         return contextlib.contextmanager(gen_wrapper)
 
     @functools.wraps(func)
     def wrapped(*args, **kwargs):
-        with profiler.record_event('internal', func.__qualname__):
+        with profiler.record_event(func.__qualname__):
             return func(*args, **kwargs)
     return wrapped
 
@@ -176,7 +184,8 @@ class ProfiledMeta(type):
                 continue
             # Wrap instance methods only
             namespace[attr] = profiler_wrapper(val)
-        return super().__new__(cls, name, bases, namespace)
+        with profiler.record_event('event'):
+            return super().__new__(cls, name, bases, namespace)
 
 class ProfiledMetaABC(ABCMeta):
     def __new__(cls, name, bases, namespace):
@@ -185,13 +194,13 @@ class ProfiledMetaABC(ABCMeta):
                 @functools.wraps(func)
                 def gen_wrapper(*args, **kwargs):
                     gen = func(*args, **kwargs)
-                    with profiler.record_event('scheduler', func.__qualname__):
+                    with profiler.record_event(func.__qualname__):
                         yield from gen
                 return contextlib.contextmanager(gen_wrapper)
 
             @functools.wraps(func)
             def wrapped(*args, **kwargs):
-                with profiler.record_event('scheduler', func.__qualname__):
+                with profiler.record_event(func.__qualname__):
                     return func(*args, **kwargs)
             return wrapped
 
