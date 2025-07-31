@@ -3,7 +3,9 @@
 from abc import ABC, abstractmethod
 from collections.abc import Iterable
 from typing import TYPE_CHECKING, Optional, Union
-
+from vllm.v1.engine.engine_core_profiler import (EngineCoreProfiler, ProfiledMetaABC)
+import inspect 
+import functools
 if TYPE_CHECKING:
     from vllm.distributed.kv_transfer.kv_connector.v1 import KVConnectorBase_V1
     from vllm.v1.core.sched.output import SchedulerOutput
@@ -13,7 +15,9 @@ if TYPE_CHECKING:
     from vllm.v1.request import Request, RequestStatus
 
 
-class SchedulerInterface(ABC):
+
+
+class SchedulerInterface(ABC, metaclass=ProfiledMetaABC):
 
     @abstractmethod
     def schedule(self) -> "SchedulerOutput":

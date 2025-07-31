@@ -35,6 +35,7 @@ from vllm.v1.engine import (EngineCoreOutputs, EngineCoreRequest,
                             EngineCoreRequestType,
                             ReconfigureDistributedRequest, ReconfigureRankType,
                             UtilityOutput)
+from vllm.v1.engine.engine_core_profiler import (EngineCoreProfiler, ProfiledMeta)
 from vllm.v1.engine.mm_input_cache import MirroredProcessingCache
 from vllm.v1.engine.utils import EngineHandshakeMetadata, EngineZmqAddresses
 from vllm.v1.executor.abstract import Executor
@@ -53,8 +54,14 @@ HANDSHAKE_TIMEOUT_MINS = 5
 
 _R = TypeVar('_R')  # Return type for collective_rpc
 
+import time
+import functools
+import inspect
+import contextlib
 
-class EngineCore:
+
+
+class EngineCore(metaclass=ProfiledMeta):
     """Inner loop of vLLM's Engine."""
 
     def __init__(self,
